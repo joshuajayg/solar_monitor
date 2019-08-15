@@ -7,8 +7,8 @@ import paho.mqtt.client as mqtt
 import sqlite3
 from sqlite3 import Error
 
-mqtt_broker = "192.168.4.1"
-database = "/media/pi/DATABASE/SQLite_and_Paho/Solar.db"
+mqtt_broker = "Your MQTT broker IP"
+database = "Your_Database.db"
 
 inverter_list = [0,0,0,0,0,0]
 charge_controller_list = [0,0,0,0,0]
