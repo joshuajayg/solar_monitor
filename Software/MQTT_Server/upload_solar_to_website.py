@@ -18,10 +18,10 @@ from time import localtime, strftime
 import requests
 import json
 
-local_atmosphere_database = "/media/pi/DATABASE/SQLite_and_Paho/Solar.db"
-get_request = "http://www.yeolecabin.com/read_rowid_solar.php" 
-post_request = "http://www.yeolecabin.com/update_solar.php"
-key = '8675309'  #my "super secret" key to make sure I only get my data
+local_solar_database = "Your_Local_Database.db"
+get_request = "Your_Remote_Server_GET_URL" 
+post_request = "Your_Remote_Server_POST_URL"
+key = 'YOUR_KEY'  #my "super secret" key to make sure I only get my data
 tables = ("charge_controller", "battery", "inverter", "auxiliary")
 
 def create_connection(db_file):
@@ -58,7 +58,7 @@ def check_server(query_table):  #get the highest ROWID from the server's databas
     
 def check_db(query_table):
     print 'checking local database for max ROWID'
-    conn = create_connection(local_atmosphere_database)
+    conn = create_connection(local_solar_database)
     with conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -71,7 +71,7 @@ def check_db(query_table):
         return maxROWID
 
 def query_db(maxROWID_server, table):
-    conn = create_connection(local_atmosphere_database)
+    conn = create_connection(local_solar_database)
     with conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
