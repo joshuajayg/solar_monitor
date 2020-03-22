@@ -10,9 +10,18 @@ const char* ssid = "Your_Access_Point";
 const char* password = "Your_Password";
 const char* mqtt_server = "Server_IP";
 
-const float batteryEfficiency = .95;  // How much of the charge the batteries absorb
+const float batteryEfficiency = .97;  // How much of the charge the batteries absorb
 const float batteryCapacity = 450;  // Amp Hours
 
+float initialBatteryAmpHours = 450;
+float initialInverterWattHours = -2265;
+float initialInverterAmpHours = -88.15;
+float initialChargeControllerAmpHours = 163.54;
+float initialChargeControllerWattHours = 4666;
+
+// Input pins
+//#define floatPin D3
+  
 // Tracking time
 unsigned long lastTime1;
 unsigned long lastTime2;
@@ -203,6 +212,25 @@ void OTASetup()
     Serial.println(WiFi.localIP());
 }
 
+void setInitialValues() {
+  
+    // Set initial values
+    batteryAmpHours = initialBatteryAmpHours;
+    inverterWattHours = initialInverterWattHours;
+    inverterAmpHours = initialInverterAmpHours;
+    chargeControllerAmpHours = initialChargeControllerAmpHours;
+    chargeControllerWattHours = initialChargeControllerWattHours;
+}
+
+/*
+void checkForFloat() {
+  bool floatState = digitalRead(floatPin);
+  if(floatState){
+    batteryAmpHours = batteryCapacity;
+  }
+}
+*/
+
 void getReadings()
 {
   unsigned long now = millis();
@@ -220,8 +248,6 @@ void getReadings()
 
   //Max input voltage is 102.4V full scale and 25mV resolution.
   float volt1 = sensor1.getInputVoltage();
-  //Voltage at ADIN pin is 2.048V full scale and 0.5mV resolution.  Do not exceed 5V!
-  float adin1 = sensor1.getADCInVoltage();
   //Calculated watts from amp and volt.
   float watt1 = amp1*volt1;
 
@@ -236,7 +262,6 @@ void getReadings()
   amp2 = total2 / numReadings2;
 
   float volt2 = sensor2.getInputVoltage();
-  float adin2 = sensor2.getADCInVoltage();
   float watt2 = amp2*volt2;
 
   total3 = total3 - readings3[readIndex3];
@@ -250,7 +275,6 @@ void getReadings()
   amp3 = total3 / numReadings3;
 
   float volt3 = sensor3.getInputVoltage();
-  float adin3 = sensor3.getADCInVoltage();
   float watt3 = amp3*volt3;
 
   total4 = total4 - readings4[readIndex4];
@@ -264,7 +288,6 @@ void getReadings()
   amp4 = total4 / numReadings4;
 
   float volt4 = sensor4.getInputVoltage();
-  float adin4 = sensor4.getADCInVoltage();
   float watt4 = amp4*volt4;
 
   total5 = total5 - readings5[readIndex5];
@@ -278,7 +301,6 @@ void getReadings()
   amp5 = total5 / numReadings5;
   
   float volt5 = sensor5.getInputVoltage();
-  float adin5 = sensor5.getADCInVoltage();
   float watt5 = amp5*volt5;
 
   total6 = total6 - readings6[readIndex6];
@@ -292,7 +314,6 @@ void getReadings()
   amp6 = total6 / numReadings6;
 
   float volt6 = sensor6.getInputVoltage();
-  float adin6 = sensor6.getADCInVoltage();
   float watt6 = amp6*volt6;
 
   // Choose the greater of the two readings and set them as positive or negative
@@ -472,6 +493,8 @@ void setup()
     Serial.begin(9600);
     while (!Serial);
 
+//    pinMode(floatPin, INPUT);
+
     // Connect to WiFi
     setup_wifi();
 
@@ -517,12 +540,12 @@ void setup()
     lastTime2 = 0;
     lastTime3 = 0;
 
-    // Battery starts out at full charge
-    batteryAmpHours = batteryCapacity;
+    setInitialValues();  //disable this if you want to start at zero
 }
 
 void loop()
 {
+//  checkForFloat();
   getReadings();
   chargeState();
   printSerial();
