@@ -1,3 +1,26 @@
+/*
+-Written by Joshua Griffin
+-Solar power monitoring circuit for Ye Ole Cabin.  Hardware consists of an ESP8266 connected to three LCT4151 current shunt amplifiers through i2c.
+  The shunts measure inverter DC current, charge controller output current, and a 24v auxiliary DC shunt current.  The battery current is calculated off these 
+  other shunts' activity on the negative bus.  
+-The battery bank is a homemade EVE LiFePo4 setup with 560 amp hours of capacity and a 200A BMS. 
+-Data is passed from the ESP8266 to a local server running on a Raspberry Pi using MQTT.  The published topics are organized: "solar/[device]/[measurement]".  
+-There are several MQTT subscriptions as well.  They are as follows: 
+  "Midnight" which is a message sent from the Pi at midnight to reset daily charge/discharge parameters to zero.  
+  "SOC" which is a message sent as a percentage value (ie. "55.6") to reset the battery state of charge to that percent.
+  "chargeControllerAmpHours", "chargeControllerWattHours", "inverterAmpHours", "inverterWattHours", "auxiliaryAmpHours", and "auxiliaryWattHours" which simply set those 
+  variable to a new value.  These can be expressed as floating point signed integers (ie. "-1234.5").
+-There is also a full charge voltage variable that sets the state of charge to 100%.  Capacity cannot go above 100% but it can go below 0%.
+-Battery charge efficiency can be set to change the percent of amp hour added to the battery relative to the calculated charge amount. Example, if this number is set to .99
+  and the calculated current entering the batteries is 100 amps, the added batteryAmpHours will only be calculated off 99 amps of charge.  It does not affect discharge calculations.
+-Initial settings are used to give a starting point for different variables when this sketch is re-uploaded to the ESP8266.
+-OTA updates are supported using the hostname "Solar".
+-Instantaneous current readings can appear quite erratic.  There is a smoothing algorithm added to current readings through the array setup section at the top of the sketch 
+  and immediately implemented when the LTC4151 is read in the getReadings() routine.  This is a rolling average with only the oldest value in the array getting replaced each loop.
+-The number of readings used to make the rolling current average can be changed using the "numReadings(x)" variable.
+
+*/
+
 #include <Wire.h>
 #include <LTC4151.h>
 #include <ESP8266WiFi.h>
@@ -6,18 +29,19 @@
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
 
-const char* ssid = "Your_Access_Point";
-const char* password = "Your_Password";
-const char* mqtt_server = "Server_IP";
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+const char* mqtt_server = "SERVER_ADDRESS";
 
-const float batteryEfficiency = .97;  // How much of the charge the batteries absorb
-const float batteryCapacity = 450;  // Amp Hours
+const float batteryEfficiency = 1.02;  // How much of the charge the batteries absorb
+const float batteryCapacity = 560;  // Amp Hours
+const float fullChargeVoltage = 28.3;  // Volts to set SOC to 100%
 
-float initialBatteryAmpHours = 450;
-float initialInverterWattHours = -2265;
-float initialInverterAmpHours = -88.15;
-float initialChargeControllerAmpHours = 163.54;
-float initialChargeControllerWattHours = 4666;
+float initialBatteryAmpHours = 456.7;
+float initialInverterWattHours = -1930;
+float initialInverterAmpHours = -73;
+float initialChargeControllerAmpHours = 27.5;
+float initialChargeControllerWattHours = 750;
 
 // Input pins
 //#define floatPin D3
@@ -157,6 +181,14 @@ void reconnect() {
       Serial.println("connected");
       // Subscribe
       client.subscribe("midnight");
+      client.subscribe("SOC");
+      client.subscribe("chargeControllerAmpHours");
+      client.subscribe("chargeControllerWattHours");
+      client.subscribe("inverterAmpHours");
+      client.subscribe("inverterWattHours");
+      client.subscribe("auxiliaryAmpHours");
+      client.subscribe("auxiliaryWattHours");
+
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -167,8 +199,7 @@ void reconnect() {
   }
 }
 
-void OTASetup()
-{
+void OTASetup() {
     // Port defaults to 8266
     // ArduinoOTA.setPort(8266);
 
@@ -231,13 +262,14 @@ void checkForFloat() {
 }
 */
 
-void getReadings()
-{
+void getReadings() {
   unsigned long now = millis();
 
-//array for amp smoothing
+  // Array for amp smoothing
+  // An array is kept of the last "numReadings" number of readings.  The array index is incremented after each reading and that value is replaced with 
+  // a new read value.  The array is then averaged to give a rolling average of the last numReadings number of readings.  
   total1 = total1 - readings1[readIndex1];
-  readings1[readIndex1] = (sensor1.getLoadCurrent(0.000375));
+  readings1[readIndex1] = (sensor1.getLoadCurrent(0.000375));  //  Vdrop/A
   total1 = total1 + readings1[readIndex1];
   readIndex1 = readIndex1 + 1;
 
@@ -400,8 +432,7 @@ void getReadings()
   
 }
 
-void printSerial()
-{
+void printSerial() {
   Serial.print(chargeControllerAmps);
   Serial.print("  ");
   Serial.print(chargeControllerWatts);
@@ -412,8 +443,7 @@ void printSerial()
   
 }
 
-void sendMQTT()
-{
+void sendMQTT() {
   if (!client.connected()) {
     reconnect();
   }
@@ -463,37 +493,116 @@ void sendMQTT()
 }
 
 void chargeState() {
-  if (batteryAmpHours > batteryCapacity) {
+  if (batteryAmpHours > batteryCapacity) {  // No state of charge over 100%
+    batteryAmpHours = batteryCapacity;
+  }
+  if (chargeControllerVolts >= fullChargeVoltage) {  // We are fully charged if voltage reaches this level
     batteryAmpHours = batteryCapacity;
   }
   
 }
 void callback(char* topic, byte* payload, unsigned int length) {
+  
   Serial.print("Message arrived [");
   Serial.print(topic);
-  Serial.print("] ");
-  for (int i=0;i<length;i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
+  Serial.println("] ");
 
-  if ((char)payload[0] == '1') {
-    chargeControllerAmpHours = 0;
-    chargeControllerWattHours = 0;
-    inverterAmpHours = 0;
-    inverterWattHours = 0;
-    auxiliaryAmpHours = 0;
-    auxiliaryWattHours = 0;
+  if (strcmp(topic, "midnight") == 0) {
+    if ((char)payload[0] == '1') {
+      chargeControllerAmpHours = 0;
+      chargeControllerWattHours = 0;
+      inverterAmpHours = 0;
+      inverterWattHours = 0;
+      auxiliaryAmpHours = 0;
+      auxiliaryWattHours = 0;
+    }
   }
+
+  if (strcmp(topic, "SOC") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    batteryAmpHours = (newValue/100)*batteryCapacity;
+  }
+
+  if (strcmp(topic, "chargeControllerAmpHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    chargeControllerAmpHours = newValue;
+  }
+
+  if (strcmp(topic, "chargeControllerWattHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    chargeControllerWattHours = newValue;
+  }
+
+  if (strcmp(topic, "inverterAmpHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    inverterAmpHours = newValue;
+  }
+
+  if (strcmp(topic, "inverterWattHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    inverterWattHours = newValue;
+  }
+
+  if (strcmp(topic, "auxiliaryAmpHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    auxiliaryAmpHours = newValue;
+  }
+
+  if (strcmp(topic, "auxiliaryWattHours") == 0) {
+    byte payloadArray[length];  // Redeclare payloadArray each time to clear memory to size of new payload
+    
+    for (int i=0;i<length;i++) {
+      payloadArray[i]=(char)payload[i];
+    }
+    String convertedPayload = String((char *)payloadArray);  // Convert byteArray to String
+    float newValue = convertedPayload.toFloat();
+    auxiliaryWattHours = newValue;
+  }
+
 }
 
-void setup()
-{   
+void setup() {   
     // Start serial connection
     Serial.begin(9600);
     while (!Serial);
 
-//    pinMode(floatPin, INPUT);
+  //    pinMode(floatPin, INPUT);
 
     // Connect to WiFi
     setup_wifi();
@@ -543,12 +652,11 @@ void setup()
     setInitialValues();  //disable this if you want to start at zero
 }
 
-void loop()
-{
-//  checkForFloat();
+void loop() {
+  //  checkForFloat();
   getReadings();
   chargeState();
-  printSerial();
+  //  printSerial();
   sendMQTT();
   
   ArduinoOTA.handle();
